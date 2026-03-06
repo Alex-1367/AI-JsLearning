@@ -1,0 +1,34 @@
+{
+  "name": "aijslearning",
+  "version": "1.0.0",
+  "main": "index.js",
+   "description": "Intelligent JavaScript learning system with performance tracking and adaptive example generation",
+  "scripts": {
+    "start": "node index.js",
+    "scan": "node scripts/scan.js",
+    "analyze": "node scripts/analyze.js",
+    "backup": "node scripts/backup.js"
+  },
+    "dependencies": {
+    "chromadb": "^1.5.0",
+    "fs-extra": "^11.1.0",
+    "path": "^0.12.7",
+    "crypto": "^1.0.1",
+    "readline": "^1.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+   "keywords": [
+    "javascript",
+    "learning",
+    "quiz",
+    "ai",
+    "ollama",
+    "chromadb",
+    "education"
+  ],
+  "author": "anonimous",
+  "license": "ISC",
+  "type": "module"
+}
