@@ -1,4 +1,18 @@
-// index.js
+process.on('uncaughtException', (err) => {
+  console.error('\n❌ UNCAUGHT EXCEPTION:');
+  console.error(err);
+  console.error('\n💡 The program will continue running...');
+  // Don't exit - just log and continue
+});
+
+process.on('unhandledRejection', (err) => {
+  console.error('\n❌ UNHANDLED REJECTION:');
+  console.error(err);
+  console.error('\n💡 The program will continue running...');
+  // Don't exit - just log and continue
+});
+
+// index.js - CLEAN VERSION
 import { DatabaseManager } from './modules/core/database.js';
 import { EmbeddingService } from './modules/core/embeddings.js';
 import { LLMService } from './modules/core/llm.js';
@@ -13,6 +27,7 @@ import { ExampleRecommender } from './modules/analytics/recommender.js';
 import { ExampleCreator } from './modules/generator/exampleCreator.js';
 import { SearchService } from './modules/search/service.js';
 import { MenuSystem } from './modules/ui/menu.js';
+import readline from 'readline';
 
 class JSLearningSystem {
   constructor() {
@@ -25,7 +40,7 @@ class JSLearningSystem {
     // Core services
     this.services.db = new DatabaseManager();
     await this.services.db.initialize();
-    
+
     this.services.embeddings = new EmbeddingService();
     this.services.llm = new LLMService();
     this.services.state = new StateManager();
@@ -46,7 +61,7 @@ class JSLearningSystem {
       this.services.logger,
       this.services.llm
     );
-    
+
     this.services.dashboard = new Dashboard(
       this.services.logger,
       this.services.db,
@@ -56,10 +71,11 @@ class JSLearningSystem {
     // Example creation
     this.services.creator = new ExampleCreator(
       this.services.llm,
-      this.services.db
+      this.services.db,
+      this.services.state
     );
 
-    // Recommendation engine
+    // Recommendation engine - FIXED: 'this' not 'self'
     this.services.recommender = new ExampleRecommender(
       this.services.db,
       this.services.logger,
@@ -80,27 +96,50 @@ class JSLearningSystem {
       this.services.state
     );
 
-    // Check if first run
-    const count = await this.services.db.count();
-    if (count === 0) {
-      console.log('📥 First run detected. Would you like to scan your folders?');
-      const menu = new MenuSystem(this.services);
-      const answer = await menu.question('Scan now? (y/n): ');
-      if (answer.toLowerCase() === 'y') {
-        await this.services.scanner.updateIndex();
-      }
-    }
-
     return this;
   }
 
+  async promptYesNo(question) {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    return new Promise((resolve) => {
+      rl.question(question, (answer) => {
+        rl.close();
+        resolve(answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes');
+      });
+    });
+  }
+
   async start() {
+    // Check first run
+    const count = await this.services.db.count();
+
+    if (count === 0) {
+      console.log('📥 First run detected.');
+      const shouldScan = await this.promptYesNo('Scan your folders now? (y/n): ');
+
+      if (shouldScan) {
+        console.log('📚 Scanning folders...');
+        await this.services.scanner.updateIndex();
+        console.log('✅ Scan complete!');
+      }
+    }
+
+    // Start menu system
     const menu = new MenuSystem(this.services);
     await menu.start();
   }
 }
 
 // Start the system
-const system = new JSLearningSystem();
-await system.initialize();
-await system.start();
+try {
+  const system = new JSLearningSystem();
+  await system.initialize();
+  await system.start();
+} catch (error) {
+  console.error('❌ Fatal error:', error);
+  process.exit(1);
+}

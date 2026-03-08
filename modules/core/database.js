@@ -48,7 +48,7 @@ export class DatabaseManager {
       include: ["documents", "metadatas", "embeddings"],
       limit: 1000
     });
-    
+
     return results.ids.map((id, i) => ({
       id,
       code: results.documents[i],
@@ -63,5 +63,52 @@ export class DatabaseManager {
       include: ["documents", "metadatas"],
       limit: 100
     });
+  }
+
+  async getAllRecords(where = null) {  // Change default to null, not undefined
+    try {
+      // First, get total count
+      const totalCount = await this.count();
+      console.log(`📚 Total records in database: ${totalCount}`);
+
+      // Then get all records in batches
+      const batchSize = 1000;
+      const allIds = [];
+      const allDocuments = [];
+      const allMetadatas = [];
+
+      for (let offset = 0; offset < totalCount; offset += batchSize) {
+        console.log(`   Fetching batch ${offset / batchSize + 1}/${Math.ceil(totalCount / batchSize)}...`);
+
+        // Only include where if it's not null
+        const options = {
+          include: ["documents", "metadatas"],
+          limit: batchSize,
+          offset
+        };
+
+        // Add where clause only if provided
+        if (where && Object.keys(where).length > 0) {
+          options.where = where;
+        }
+
+        const batch = await this.getRecords(options);
+
+        allIds.push(...batch.ids);
+        allDocuments.push(...batch.documents);
+        allMetadatas.push(...batch.metadatas);
+      }
+
+      console.log(`   ✅ Retrieved ${allIds.length} total records`);
+
+      return {
+        ids: allIds,
+        documents: allDocuments,
+        metadatas: allMetadatas
+      };
+    } catch (error) {
+      console.error('❌ Error in getAllRecords:', error.message);
+      throw error;
+    }
   }
 }

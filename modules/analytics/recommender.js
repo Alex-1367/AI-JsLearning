@@ -3,7 +3,7 @@ export class ExampleRecommender {
   constructor(database, quizLogger, gapAnalyzer, exampleCreator) {
     this.db = database;
     this.logger = quizLogger;
-    self.gapAnalyzer = gapAnalyzer;
+    this.gapAnalyzer = gapAnalyzer;
     this.creator = exampleCreator;
   }
 

@@ -11,7 +11,7 @@ export class ChromaClient {
   async request(endpoint, options = {}) {
     const url = `${this.apiBase}${endpoint}`;
     console.log(`🔧 Making request to: ${url}`);
-    
+
     const response = await fetch(url, {
       headers: {
         'Content-Type': 'application/json',
@@ -33,7 +33,7 @@ export class ChromaClient {
     if (contentType && contentType.includes('application/json')) {
       return response.json();
     }
-    
+
     return response.text();
   }
 
@@ -66,7 +66,7 @@ export class ChromaClient {
       },
       get_or_create: false
     };
-    
+
     return this.request(`/tenants/${tenant}/databases/${database}/collections`, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -84,7 +84,7 @@ export class ChromaClient {
       },
       get_or_create: true
     };
-    
+
     return this.request(`/tenants/${tenant}/databases/${database}/collections`, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -110,33 +110,43 @@ export class ChromaClient {
   }
 
   async addDocuments(collectionId, documents, ids, embeddings = null, metadatas = []) {
+    console.log(`    📤 Sending ${documents.length} documents to ChromaDB`);
+    console.log(`       Total size: ~${JSON.stringify(documents).length} bytes`);
+
     const embeds = embeddings || documents.map(() => [0.1, 0.2, 0.3, 0.4]);
-    
+
     const records = {
       ids: ids,
       documents: documents,
       embeddings: embeds,
       metadatas: metadatas.length ? metadatas : documents.map(() => ({}))
     };
-    
-    return this.addRecords(collectionId, records);
+
+    try {
+      const result = await this.addRecords(collectionId, records);
+      console.log(`       ✅ ChromaDB accepted the batch`);
+      return result;
+    } catch (error) {
+      console.error(`       ❌ ChromaDB rejected the batch:`, error.message);
+      throw error;
+    }
   }
 
   async query(collectionId, queryEmbeddings, nResults = 5, where = {}, tenant = this.tenant, database = this.database) {
-    const embeddingsArray = Array.isArray(queryEmbeddings[0]) 
-      ? queryEmbeddings 
+    const embeddingsArray = Array.isArray(queryEmbeddings[0])
+      ? queryEmbeddings
       : [queryEmbeddings];
-    
+
     const body = {
       query_embeddings: embeddingsArray,
       n_results: nResults,
       include: ["documents", "metadatas", "distances"]
     };
-    
+
     if (Object.keys(where).length > 0) {
       body.where = where;
     }
-    
+
     return this.request(`/tenants/${tenant}/databases/${database}/collections/${collectionId}/query`, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -152,7 +162,7 @@ export class ChromaClient {
       limit: options.limit || null,
       offset: options.offset || 0
     };
-    
+
     return this.request(`/tenants/${tenant}/databases/${database}/collections/${collectionId}/get`, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -165,7 +175,7 @@ export class ChromaClient {
       where: options.where || null,
       where_document: options.where_document || null
     };
-    
+
     return this.request(`/tenants/${tenant}/databases/${database}/collections/${collectionId}/delete`, {
       method: 'POST',
       body: JSON.stringify(body),

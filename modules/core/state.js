@@ -1,6 +1,9 @@
-// modules/core/state.js
+// modules/core/state.js - FIXED
 import fs from 'fs/promises';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export class StateManager {
   constructor() {
@@ -22,21 +25,43 @@ export class StateManager {
         totalQuizzes: 0,
         correctAnswers: 0,
         wrongAnswers: 0,
-        lastQuizDate: null
+        lastQuizDate: null,
+        topicStats: {}
       },
-      generatedExamples: {} // Track examples we've generated
+      generatedExamples: {}
     };
+    this.initialized = false;
   }
 
   async load() {
     try {
-      const data = await fs.readFile(this.stateFile, 'utf-8');
-      this.state = JSON.parse(data);
-      console.log('📂 State loaded successfully');
-    } catch (e) {
-      console.log('🆕 No existing state found, starting fresh');
       await this.ensureDirectory();
-      await this.save();
+      const data = await fs.readFile(this.stateFile, 'utf-8');
+      const loadedState = JSON.parse(data);
+      
+      // Merge with defaults to ensure all fields exist
+      this.state = {
+        ...this.state,
+        ...loadedState,
+        stats: {
+          ...this.state.stats,
+          ...(loadedState.stats || {})
+        },
+        filePatterns: this.state.filePatterns // Keep default patterns
+      };
+      
+      this.initialized = true;
+      console.log('📂 State loaded successfully');
+      return true;
+    } catch (e) {
+      if (e.code === 'ENOENT') {
+        console.log('🆕 No existing state found, creating new state');
+        await this.save();
+        this.initialized = true;
+        return false;
+      }
+      console.error('Error loading state:', e);
+      return false;
     }
   }
 
@@ -74,6 +99,10 @@ export class StateManager {
     delete this.state.indexedFiles[filePath];
   }
 
+  getIndexedCount() {
+    return Object.keys(this.state.indexedFiles).length;
+  }
+
   // Generated examples tracking
   trackGeneratedExample(topic, filePath, number) {
     if (!this.state.generatedExamples[topic]) {
@@ -99,7 +128,6 @@ export class StateManager {
 
     if (numbers.length === 0) return 0;
     
-    // Find first gap
     for (let i = 0; i <= numbers.length; i++) {
       if (numbers[i] !== i) return i;
     }
@@ -116,10 +144,6 @@ export class StateManager {
     }
     this.state.stats.lastQuizDate = new Date().toISOString();
     
-    // Track per-topic stats
-    if (!this.state.stats.topicStats) {
-      this.state.stats.topicStats = {};
-    }
     if (!this.state.stats.topicStats[topic]) {
       this.state.stats.topicStats[topic] = { correct: 0, wrong: 0 };
     }
@@ -132,15 +156,14 @@ export class StateManager {
   }
 
   getTopicStats(topic) {
-    return this.state.stats.topicStats?.[topic] || { correct: 0, wrong: 0 };
+    return this.state.stats.topicStats[topic] || { correct: 0, wrong: 0 };
   }
 
   getOverallStats() {
-    const stats = this.state.stats;
     return {
-      ...stats,
-      successRate: stats.totalQuizzes > 0 
-        ? (stats.correctAnswers / stats.totalQuizzes * 100).toFixed(1)
+      ...this.state.stats,
+      successRate: this.state.stats.totalQuizzes > 0 
+        ? (this.state.stats.correctAnswers / this.state.stats.totalQuizzes * 100).toFixed(1)
         : 0
     };
   }
