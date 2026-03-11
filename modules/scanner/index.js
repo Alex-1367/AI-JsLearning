@@ -1,4 +1,4 @@
-// modules/scanner/index.js - FIXED
+// modules/scanner/index.js - COMPLETELY REPAIRED
 import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
@@ -8,6 +8,7 @@ export class Scanner {
     this.db = database;
     this.embeddings = embeddings;
     this.state = state;
+    this.processedLog = path.join(process.cwd(), 'data', 'processed_files.log');
   }
 
   async updateIndex(forceRescan = false) {
@@ -17,6 +18,7 @@ export class Scanner {
     const stats = {
       scanned: 0,
       new: 0,
+      alreadyInDb: 0,
       changed: 0,
       unchanged: 0,
       deleted: 0,
@@ -25,113 +27,168 @@ export class Scanner {
       batches: 0
     };
 
-    // Get all current files from folders
+    // STEP 1: Get ALL files currently in database
+    console.log('\n📚 Loading existing database records...');
+    const dbFiles = await this.getAllDatabaseFiles();
+    console.log(`   ✅ Found ${dbFiles.size} unique files in database`);
+
+    // STEP 2: Scan folders for files on disk
     const folders = this.state.getFolders();
-    console.log(`📁 Scanning folders: ${folders.join(', ')}`);
+    console.log(`\n📁 Scanning folders: ${folders.join(', ')}`);
 
-    const currentFiles = new Map();
-
+    const diskFiles = new Map();
     for (const folder of folders) {
       console.log(`  Scanning ${folder}...`);
       const files = await this.scanFolder(folder);
       console.log(`    Found ${files.length} files in ${folder}`);
       for (const file of files) {
-        currentFiles.set(file.path, file);
+        diskFiles.set(file.path, file);
       }
     }
 
-    console.log(`📊 Found ${currentFiles.size} total files to process`);
+    console.log(`\n📊 Total files on disk: ${diskFiles.size}`);
 
-    if (currentFiles.size === 0) {
-      console.log('❌ No files found! Check folder paths.');
-      return stats;
-    }
-
-    // Check for deleted files
-    const previousPaths = Object.keys(this.state.state.indexedFiles || {});
-    console.log(`📋 Previously indexed: ${previousPaths.length} files`);
-
-    for (const prevPath of previousPaths) {
-      if (!currentFiles.has(prevPath)) {
-        await this.deleteDocument(prevPath);
-        this.state.removeFileInfo(prevPath);
-        stats.deleted++;
-      }
-    }
-
-    // Process current files in batches
-    const batchSize = 5;
+    // STEP 3: Check which files need processing
+    console.log('\n🔍 Comparing with database...');
     const filesToProcess = [];
-    let totalProcessed = 0;
 
-    for (const [filePath, fileInfo] of currentFiles) {
+    for (const [filePath, fileInfo] of diskFiles) {
       stats.scanned++;
 
       try {
-        const content = await fs.readFile(filePath, 'utf-8');
-        const hash = this.calculateHash(content);
-        const previous = this.state.getFileInfo(filePath);
-
-        if (!previous) {
-          filesToProcess.push({ ...fileInfo, content, hash, action: 'new' });
-          stats.new++;
-          console.log(`  📄 New file: ${path.basename(filePath)}`);
-        } else if (previous.hash !== hash || forceRescan) {
-          filesToProcess.push({ ...fileInfo, content, hash, action: 'changed' });
-          stats.changed++;
-          console.log(`  📝 Changed file: ${path.basename(filePath)}`);
-        } else {
-          stats.unchanged++;
+        // Check if file is already in database
+        if (dbFiles.has(filePath) && !forceRescan) {
+          stats.alreadyInDb++;
+          if (stats.alreadyInDb % 100 === 0) {
+            console.log(`   ✅ ${stats.alreadyInDb} files already in database (skipped)`);
+          }
+          continue;
         }
 
-        if (filesToProcess.length >= batchSize) {
+        // New file - read and prepare for processing
+        const content = await fs.readFile(filePath, 'utf-8');
+        const hash = this.calculateHash(content);
+        
+        console.log(`  📄 New file: ${path.basename(filePath)}`);
+        filesToProcess.push({ 
+          ...fileInfo, 
+          content, 
+          hash, 
+          action: 'new' 
+        });
+        stats.new++;
+
+        // Process in batches
+        if (filesToProcess.length >= 5) {
           console.log(`\n  📦 Processing batch ${++stats.batches} (${filesToProcess.length} files)...`);
           await this.processFileBatch(filesToProcess);
           stats.totalIndexed += filesToProcess.length;
-          totalProcessed += filesToProcess.length;
-          console.log(`  ✅ Batch complete. Total processed: ${totalProcessed}/${currentFiles.size}`);
           filesToProcess.length = 0;
+          
+          // Log progress
+          const percent = ((stats.totalIndexed / (stats.new || 1)) * 100).toFixed(1);
+          console.log(`  ✅ Progress: ${stats.totalIndexed}/${stats.new} new files (${percent}%)`);
         }
+
       } catch (error) {
         console.error(`❌ Error reading ${filePath}:`, error.message);
         stats.errors++;
       }
     }
 
+    // Process remaining files
     if (filesToProcess.length > 0) {
       console.log(`\n  📦 Processing final batch (${filesToProcess.length} files)...`);
       await this.processFileBatch(filesToProcess);
       stats.totalIndexed += filesToProcess.length;
-      totalProcessed += filesToProcess.length;
       stats.batches++;
     }
 
-    // Update state
-    this.state.state.lastScan = new Date().toISOString();
-    await this.state.save();
+    // Check for deleted files
+    console.log('\n🔍 Checking for deleted files...');
+    for (const dbPath of dbFiles.keys()) {
+      if (!diskFiles.has(dbPath)) {
+        await this.deleteDocument(dbPath);
+        stats.deleted++;
+        console.log(`  🗑️  Deleted from DB: ${path.basename(dbPath)}`);
+      }
+    }
 
-    console.log('\n' + '='.repeat(50));
-    console.log('📈 SCAN COMPLETE');
-    console.log('='.repeat(50));
-    console.log(`📁 Total files found: ${currentFiles.size}`);
-    console.log(`📦 Total batches: ${stats.batches}`);
-    console.log(`✅ Total indexed: ${stats.totalIndexed}`);
-    console.log(`📊 New files: ${stats.new}`);
+    // Final summary
+    console.log('\n' + '='.repeat(60));
+    console.log('📊 SCAN COMPLETE - FINAL STATISTICS');
+    console.log('='.repeat(60));
+    console.log(`📁 Total files on disk: ${diskFiles.size}`);
+    console.log(`📚 Already in database: ${stats.alreadyInDb}`);
+    console.log(`📤 New files added: ${stats.totalIndexed}`);
     console.log(`📝 Changed files: ${stats.changed}`);
-    console.log(`⏺️ Unchanged: ${stats.unchanged}`);
-    console.log(`🗑️ Deleted: ${stats.deleted}`);
-    if (stats.errors > 0) console.log(`❌ Errors: ${stats.errors}`);
-
-    // Show final count
+    console.log(`🗑️  Deleted from DB: ${stats.deleted}`);
+    console.log(`❌ Errors: ${stats.errors}`);
+    console.log(`📦 Batches processed: ${stats.batches}`);
+    
     const finalCount = await this.db.count();
     console.log(`\n📚 Final documents in database: ${finalCount}`);
-
+    
+    // Save processed files log
+    await this.saveProcessedLog(diskFiles);
+    
     return stats;
+  }
+
+  async getAllDatabaseFiles() {
+    const dbFiles = new Map();
+    let offset = 0;
+    const limit = 1000;
+    
+    while (true) {
+      try {
+        const results = await this.db.getRecords({
+          include: ["metadatas"],
+          limit: limit,
+          offset: offset
+        });
+        
+        if (results.ids.length === 0) break;
+        
+        for (let i = 0; i < results.ids.length; i++) {
+          const metadata = results.metadatas[i];
+          if (metadata?.path) {
+            dbFiles.set(metadata.path, {
+              id: results.ids[i],
+              hash: metadata.hash,
+              indexedAt: metadata.indexedAt
+            });
+          }
+        }
+        
+        offset += limit;
+        console.log(`   Loaded ${dbFiles.size} database records...`);
+        
+      } catch (error) {
+        console.error('Error loading database files:', error.message);
+        break;
+      }
+    }
+    
+    return dbFiles;
+  }
+
+  async saveProcessedLog(diskFiles) {
+    try {
+      const logLines = [];
+      for (const [path, info] of diskFiles) {
+        logLines.push(`${new Date().toISOString()}|${path}|${info.filename}`);
+      }
+      await fs.writeFile(this.processedLog, logLines.join('\n'));
+      console.log(`\n📝 Processed files log saved to: ${this.processedLog}`);
+    } catch (error) {
+      console.error('Error saving processed log:', error.message);
+    }
   }
 
   async scanFolder(folderPath) {
     const files = [];
-
+    
     try {
       const entries = await fs.readdir(folderPath, { withFileTypes: true });
 
@@ -160,7 +217,6 @@ export class Scanner {
   categorizeFile(fullPath, filename) {
     const patterns = this.state.state.filePatterns;
 
-    // Check for JS examples with pattern (RP#01.js, BG#00.js)
     if (patterns.jsExamples.test(filename)) {
       const pattern = this.extractNumberingPattern(filename);
       const folderName = path.basename(path.dirname(fullPath));
@@ -175,7 +231,6 @@ export class Scanner {
         topic: topic
       };
     }
-    // Check for explanation files
     else if (patterns.explanations.test(filename)) {
       return {
         path: fullPath,
@@ -185,7 +240,6 @@ export class Scanner {
         relatedExample: this.findRelatedExample(filename, path.dirname(fullPath))
       };
     }
-    // Check for other JS files
     else if (patterns.otherJs.test(filename)) {
       const folderName = path.basename(path.dirname(fullPath));
       const topic = this.folderToTopic(folderName);
@@ -234,7 +288,6 @@ export class Scanner {
   }
 
   folderToTopic(folderName) {
-    // Convert folder names like "BigInt" to "bigint", "AsyncAwait" to "async-await"
     return folderName
       .replace(/([A-Z])/g, '-$1')
       .toLowerCase()
@@ -242,37 +295,10 @@ export class Scanner {
   }
 
   async processFileBatch(files) {
+    const failedFiles = []; // CRITICAL FIX!
+    
     console.log(`\n  📦 Processing batch of ${files.length} files:`);
 
-    // Group by top-level folder for better organization
-    const byBaseFolder = {};
-
-    for (const file of files) {
-      const baseFolder = path.basename(path.dirname(path.dirname(file.path))) +
-        '/' + path.basename(path.dirname(file.path));
-
-      if (!byBaseFolder[baseFolder]) {
-        byBaseFolder[baseFolder] = [];
-      }
-      byBaseFolder[baseFolder].push(file);
-    }
-
-    // Log each group
-    for (const [folder, groupFiles] of Object.entries(byBaseFolder)) {
-      console.log(`     📁 ${folder}/ (${groupFiles.length} files):`);
-
-      // Show first 3 files in this group
-      groupFiles.slice(0, 3).forEach(file => {
-        const action = file.action === 'changed' ? '📝' : '📄';
-        console.log(`        ${action} ${path.basename(file.path)}`);
-      });
-
-      if (groupFiles.length > 3) {
-        console.log(`        ... and ${groupFiles.length - 3} more`);
-      }
-    }
-
-    // Continue with actual processing...
     const docs = [];
     const ids = [];
     const embeddings = [];
@@ -284,7 +310,6 @@ export class Scanner {
 
         const content = file.content || await fs.readFile(file.path, 'utf-8');
 
-        // Skip empty files
         if (!content || content.trim().length === 0) {
           console.log(`    ⚠️  Skipping empty file: ${path.basename(file.path)}`);
           continue;
@@ -318,42 +343,35 @@ export class Scanner {
         embeddings.push(embedding);
         metadatas.push(metadata);
 
-        this.state.updateFileInfo(file.path, {
-          hash: file.hash,
-          fileId,
-          metadata
-        });
-
       } catch (error) {
         console.error(`    ❌ Failed to process ${path.basename(file.path)}:`, error.message);
-        failedFiles.push(file.path);
+        failedFiles.push(file.path); // Now this works!
       }
     }
 
     if (docs.length > 0) {
       try {
         console.log(`    💾 Storing ${docs.length} documents in ChromaDB...`);
-
-        // Delete old versions first
-        const changedFiles = files.filter(f => f.action === 'changed');
-        for (const file of changedFiles) {
-          await this.deleteDocument(file.path);
-        }
-
         await this.db.addDocuments(docs, ids, embeddings, metadatas);
-
-        const action = files.some(f => f.action === 'changed') ? 'Updated' : 'Added';
-        console.log(`    ✅ ${action} ${docs.length} files successfully`);
-
-        // Save state after successful batch
+        console.log(`    ✅ Successfully stored ${docs.length} files`);
+        
+        // Update state for successful files
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          if (!failedFiles.includes(file.path)) {
+            this.state.updateFileInfo(file.path, {
+              hash: file.hash,
+              fileId: ids[i],
+              metadata: metadatas[i]
+            });
+          }
+        }
+        
         await this.state.save();
-
+        
       } catch (error) {
         console.error(`    ❌ ChromaDB error:`, error.message);
-        console.error(`    Files in this batch were not saved`);
       }
-    } else {
-      console.log(`    ⚠️  No valid documents in this batch`);
     }
 
     if (failedFiles.length > 0) {
@@ -367,24 +385,14 @@ export class Scanner {
     if (fileInfo && fileInfo.fileId) {
       try {
         await this.db.deleteRecords([fileInfo.fileId]);
+        this.state.removeFileInfo(filePath);
       } catch (error) {
-        // Ignore if already deleted
+        console.error(`Error deleting ${filePath}:`, error.message);
       }
     }
   }
 
   calculateHash(content) {
     return crypto.createHash('md5').update(content).digest('hex');
-  }
-
-  printSummary(stats) {
-    console.log('\n📈 Scan Summary:');
-    console.log(`  📁 Scanned: ${stats.scanned} files`);
-    console.log(`  ✅ New: ${stats.new}`);
-    console.log(`  📝 Changed: ${stats.changed}`);
-    console.log(`  ⏺️ Unchanged: ${stats.unchanged}`);
-    console.log(`  🗑️ Deleted: ${stats.deleted}`);
-    console.log(`  📚 Indexed: ${stats.totalIndexed}`);
-    if (stats.errors > 0) console.log(`  ❌ Errors: ${stats.errors}`);
   }
 }
